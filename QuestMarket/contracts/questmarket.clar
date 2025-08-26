@@ -142,3 +142,102 @@
     )
     
     (ok true)))
+
+;; Quest Creation and Management Functions
+
+;; Create a new quest with escrow
+(define-public (create-quest (title (string-ascii 100)) (description (string-ascii 500)) 
+                           (reward uint) (deadline uint) (category (string-ascii 50)) (difficulty uint))
+  (let ((quest-id (var-get next-quest-id)))
+    (asserts! (> reward (var-get min-quest-reward)) ERR-INSUFFICIENT-FUNDS)
+    (asserts! (> deadline stacks-block-height) ERR-INVALID-PARAMETERS)
+    (asserts! (< (- deadline stacks-block-height) (var-get max-quest-duration)) ERR-INVALID-PARAMETERS)
+    (asserts! (and (>= difficulty u1) (<= difficulty u5)) ERR-INVALID-PARAMETERS)
+    (asserts! (> (len title) u0) ERR-INVALID-PARAMETERS)
+    
+    (try! (stx-transfer? reward tx-sender (as-contract tx-sender)))
+    
+    (map-set quests quest-id {
+      creator: tx-sender,
+      title: title,
+      description: description,
+      reward: reward,
+      deadline: deadline,
+      status: "active",
+      assignee: none,
+      created-at: stacks-block-height,
+      category: category,
+      difficulty: difficulty,
+      completion-proof: none
+    })
+    
+    (map-set escrow quest-id {
+      amount: reward, 
+      released: false,
+      dispute-deadline: (+ deadline (var-get dispute-window))
+    })
+    
+    ;; Update category count
+    (map-set quest-categories category {
+      active: true,
+      quest-count: (+ (default-to u0 (get quest-count (map-get? quest-categories category))) u1)
+    })
+    
+    ;; Update user profile
+    (match (map-get? user-profiles tx-sender)
+      profile (map-set user-profiles tx-sender 
+                      (merge profile {total-quests-created: (+ (get total-quests-created profile) u1)}))
+      true)
+    
+    (var-set next-quest-id (+ quest-id u1))
+    (ok quest-id)))
+
+;; Apply for a quest
+(define-public (apply-for-quest (quest-id uint) (message (string-ascii 200)))
+  (let ((quest (unwrap! (map-get? quests quest-id) ERR-QUEST-NOT-FOUND)))
+    (asserts! (is-eq (get status quest) "active") ERR-QUEST-NOT-ACTIVE)
+    (asserts! (< stacks-block-height (get deadline quest)) ERR-DEADLINE-PASSED)
+    (asserts! (is-none (map-get? applications {quest-id: quest-id, applicant: tx-sender})) ERR-ALREADY-APPLIED)
+    (asserts! (not (is-eq tx-sender (get creator quest))) ERR-NOT-AUTHORIZED)
+    
+    (map-set applications {quest-id: quest-id, applicant: tx-sender} {
+      applied-at: stacks-block-height,
+      message: message,
+      status: "pending"
+    })
+    (ok true)))
+
+;; Assign quest to an applicant
+(define-public (assign-quest (quest-id uint) (assignee principal))
+  (let ((quest (unwrap! (map-get? quests quest-id) ERR-QUEST-NOT-FOUND)))
+    (asserts! (is-eq tx-sender (get creator quest)) ERR-NOT-AUTHORIZED)
+    (asserts! (is-eq (get status quest) "active") ERR-QUEST-NOT-ACTIVE)
+    (asserts! (is-some (map-get? applications {quest-id: quest-id, applicant: assignee})) ERR-NOT-AUTHORIZED)
+    
+    (map-set quests quest-id (merge quest {
+      status: "assigned",
+      assignee: (some assignee)
+    }))
+    
+    ;; Update application status
+    (match (map-get? applications {quest-id: quest-id, applicant: assignee})
+      app (map-set applications {quest-id: quest-id, applicant: assignee}
+                   (merge app {status: "accepted"}))
+      true)
+    
+    (ok true)))
+
+;; Cancel quest and refund
+(define-public (cancel-quest (quest-id uint))
+  (let (
+    (quest (unwrap! (map-get? quests quest-id) ERR-QUEST-NOT-FOUND))
+    (escrow-data (unwrap! (map-get? escrow quest-id) ERR-QUEST-NOT-FOUND))
+  )
+    (asserts! (is-eq tx-sender (get creator quest)) ERR-NOT-AUTHORIZED)
+    (asserts! (or (is-eq (get status quest) "active") (is-eq (get status quest) "assigned")) ERR-QUEST-NOT-ACTIVE)
+    (asserts! (not (get released escrow-data)) ERR-NOT-AUTHORIZED)
+    
+    (try! (as-contract (stx-transfer? (get amount escrow-data) tx-sender (get creator quest))))
+    (map-set quests quest-id (merge quest {status: "cancelled"}))
+    (map-set escrow quest-id (merge escrow-data {released: true}))
+    (ok true)))
