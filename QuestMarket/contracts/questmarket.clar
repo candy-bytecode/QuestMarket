@@ -285,3 +285,90 @@
         true)
       
       (ok true))))
+
+;; Dispute Resolution and Read-Only Functions
+
+;; Create a dispute
+(define-public (create-dispute (quest-id uint) (reason (string-ascii 300)))
+  (let (
+    (quest (unwrap! (map-get? quests quest-id) ERR-QUEST-NOT-FOUND))
+    (escrow-data (unwrap! (map-get? escrow quest-id) ERR-QUEST-NOT-FOUND))
+    (dispute-id (var-get next-dispute-id))
+  )
+    (asserts! (or (is-eq tx-sender (get creator quest)) 
+                  (is-eq tx-sender (unwrap! (get assignee quest) ERR-NOT-AUTHORIZED))) ERR-NOT-AUTHORIZED)
+    (asserts! (< stacks-block-height (get dispute-deadline escrow-data)) ERR-DEADLINE-PASSED)
+    (asserts! (not (get released escrow-data)) ERR-NOT-AUTHORIZED)
+    
+    (map-set disputes dispute-id {
+      quest-id: quest-id,
+      initiator: tx-sender,
+      reason: reason,
+      status: "open",
+      created-at: stacks-block-height,
+      resolved-at: none,
+      resolution: none
+    })
+    
+    (var-set next-dispute-id (+ dispute-id u1))
+    (ok dispute-id)))
+
+;; Resolve dispute (only contract owner)
+(define-public (resolve-dispute (dispute-id uint) (resolution (string-ascii 300)) (refund-creator bool))
+  (let ((dispute (unwrap! (map-get? disputes dispute-id) ERR-DISPUTE-NOT-FOUND)))
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (is-eq (get status dispute) "open") ERR-NOT-AUTHORIZED)
+    
+    (let (
+      (quest-id (get quest-id dispute))
+      (quest (unwrap! (map-get? quests quest-id) ERR-QUEST-NOT-FOUND))
+      (escrow-data (unwrap! (map-get? escrow quest-id) ERR-QUEST-NOT-FOUND))
+    )
+      (if refund-creator
+        (try! (as-contract (stx-transfer? (get amount escrow-data) tx-sender (get creator quest))))
+        (try! (as-contract (stx-transfer? (get amount escrow-data) tx-sender 
+                                         (unwrap! (get assignee quest) ERR-NOT-AUTHORIZED)))))
+      
+      (map-set disputes dispute-id (merge dispute {
+        status: "resolved",
+        resolved-at: (some stacks-block-height),
+        resolution: (some resolution)
+      }))
+      
+      (map-set escrow quest-id (merge escrow-data {released: true}))
+      (map-set quests quest-id (merge quest {status: "disputed"}))
+      
+      (ok true))))
+
+;; Read-only functions
+(define-read-only (get-quest (quest-id uint))
+  (map-get? quests quest-id))
+
+(define-read-only (get-application (quest-id uint) (applicant principal))
+  (map-get? applications {quest-id: quest-id, applicant: applicant}))
+
+(define-read-only (get-user-profile (user principal))
+  (map-get? user-profiles user))
+
+(define-read-only (get-user-rating (rater principal) (ratee principal) (quest-id uint))
+  (map-get? user-ratings {rater: rater, ratee: ratee, quest-id: quest-id}))
+
+(define-read-only (get-dispute (dispute-id uint))
+  (map-get? disputes dispute-id))
+
+(define-read-only (get-platform-fee)
+  (var-get platform-fee))
+
+(define-read-only (get-next-quest-id)
+  (var-get next-quest-id))
+
+(define-read-only (get-category-info (category (string-ascii 50)))
+  (map-get? quest-categories category))
+
+(define-read-only (get-contract-stats)
+  {
+    total-quests: (- (var-get next-quest-id) u1),
+    platform-fee: (var-get platform-fee),
+    min-reward: (var-get min-quest-reward),
+    max-duration: (var-get max-quest-duration)
+  })
