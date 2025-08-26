@@ -1,30 +1,82 @@
+;; QuestMarket - Decentralized Gig Marketplace for Gamers
+;; A comprehensive marketplace where gamers can post and complete tasks with escrow protection
 
-;; title: questmarket
-;; version:
-;; summary:
-;; description:
+;; Constants
+(define-constant CONTRACT-OWNER tx-sender)
+(define-constant ERR-NOT-AUTHORIZED (err u401))
+(define-constant ERR-QUEST-NOT-FOUND (err u404))
+(define-constant ERR-INSUFFICIENT-FUNDS (err u402))
+(define-constant ERR-QUEST-NOT-ACTIVE (err u403))
+(define-constant ERR-ALREADY-APPLIED (err u405))
+(define-constant ERR-INVALID-PARAMETERS (err u406))
+(define-constant ERR-DEADLINE-PASSED (err u407))
+(define-constant ERR-USER-NOT-FOUND (err u408))
+(define-constant ERR-INVALID-RATING (err u409))
+(define-constant ERR-DISPUTE-NOT-FOUND (err u410))
+(define-constant ERR-ALREADY-RATED (err u411))
 
-;; traits
-;;
+;; Data Variables
+(define-data-var next-quest-id uint u1)
+(define-data-var next-dispute-id uint u1)
+(define-data-var platform-fee uint u250) ;; 2.5%
+(define-data-var min-quest-reward uint u1000) ;; Minimum 1000 microSTX
+(define-data-var max-quest-duration uint u52560) ;; Max 1 year in blocks
+(define-data-var dispute-window uint u1440) ;; 1 day in blocks
 
-;; token definitions
-;;
+;; Data Maps
+(define-map quests 
+  uint 
+  {
+    creator: principal,
+    title: (string-ascii 100),
+    description: (string-ascii 500),
+    reward: uint,
+    deadline: uint,
+    status: (string-ascii 20),
+    assignee: (optional principal),
+    created-at: uint,
+    category: (string-ascii 50),
+    difficulty: uint,
+    completion-proof: (optional (string-ascii 200))
+  })
 
-;; constants
-;;
+(define-map applications 
+  {quest-id: uint, applicant: principal}
+  {applied-at: uint, message: (string-ascii 200), status: (string-ascii 20)})
 
-;; data vars
-;;
+(define-map escrow
+  uint
+  {amount: uint, released: bool, dispute-deadline: uint})
 
-;; data maps
-;;
+(define-map user-profiles
+  principal
+  {
+    username: (string-ascii 50),
+    bio: (string-ascii 300),
+    total-quests-created: uint,
+    total-quests-completed: uint,
+    rating: uint,
+    rating-count: uint,
+    created-at: uint,
+    is-verified: bool
+  })
 
-;; public functions
-;;
+(define-map user-ratings
+  {rater: principal, ratee: principal, quest-id: uint}
+  {rating: uint, comment: (string-ascii 200), created-at: uint})
 
-;; read only functions
-;;
+(define-map disputes
+  uint
+  {
+    quest-id: uint,
+    initiator: principal,
+    reason: (string-ascii 300),
+    status: (string-ascii 20),
+    created-at: uint,
+    resolved-at: (optional uint),
+    resolution: (optional (string-ascii 300))
+  })
 
-;; private functions
-;;
-
+(define-map quest-categories
+  (string-ascii 50)
+  {active: bool, quest-count: uint})
