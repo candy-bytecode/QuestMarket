@@ -241,3 +241,47 @@
     (map-set quests quest-id (merge quest {status: "cancelled"}))
     (map-set escrow quest-id (merge escrow-data {released: true}))
     (ok true)))
+
+;; Quest Completion and Payment Functions
+
+;; Submit completion proof
+(define-public (submit-completion (quest-id uint) (proof (string-ascii 200)))
+  (let ((quest (unwrap! (map-get? quests quest-id) ERR-QUEST-NOT-FOUND)))
+    (asserts! (is-eq tx-sender (unwrap! (get assignee quest) ERR-NOT-AUTHORIZED)) ERR-NOT-AUTHORIZED)
+    (asserts! (is-eq (get status quest) "assigned") ERR-QUEST-NOT-ACTIVE)
+    
+    (map-set quests quest-id (merge quest {
+      status: "submitted",
+      completion-proof: (some proof)
+    }))
+    (ok true)))
+
+;; Complete quest and release payment
+(define-public (complete-quest (quest-id uint))
+  (let (
+    (quest (unwrap! (map-get? quests quest-id) ERR-QUEST-NOT-FOUND))
+    (escrow-data (unwrap! (map-get? escrow quest-id) ERR-QUEST-NOT-FOUND))
+  )
+    (asserts! (is-eq tx-sender (get creator quest)) ERR-NOT-AUTHORIZED)
+    (asserts! (or (is-eq (get status quest) "assigned") (is-eq (get status quest) "submitted")) ERR-QUEST-NOT-ACTIVE)
+    (asserts! (not (get released escrow-data)) ERR-NOT-AUTHORIZED)
+    
+    (let (
+      (reward (get amount escrow-data))
+      (fee (/ (* reward (var-get platform-fee)) u10000))
+      (payout (- reward fee))
+      (assignee (unwrap! (get assignee quest) ERR-NOT-AUTHORIZED))
+    )
+      (try! (as-contract (stx-transfer? payout tx-sender assignee)))
+      (try! (as-contract (stx-transfer? fee tx-sender CONTRACT-OWNER)))
+      
+      (map-set quests quest-id (merge quest {status: "completed"}))
+      (map-set escrow quest-id (merge escrow-data {released: true}))
+      
+      ;; Update assignee profile
+      (match (map-get? user-profiles assignee)
+        profile (map-set user-profiles assignee 
+                        (merge profile {total-quests-completed: (+ (get total-quests-completed profile) u1)}))
+        true)
+      
+      (ok true))))
