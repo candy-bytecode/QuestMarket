@@ -80,3 +80,65 @@
 (define-map quest-categories
   (string-ascii 50)
   {active: bool, quest-count: uint})
+
+;; User Profile Management Functions
+
+;; Create user profile
+(define-public (create-profile (username (string-ascii 50)) (bio (string-ascii 300)))
+  (begin
+    (asserts! (> (len username) u0) ERR-INVALID-PARAMETERS)
+    (asserts! (is-none (map-get? user-profiles tx-sender)) ERR-NOT-AUTHORIZED)
+    (map-set user-profiles tx-sender {
+      username: username,
+      bio: bio,
+      total-quests-created: u0,
+      total-quests-completed: u0,
+      rating: u0,
+      rating-count: u0,
+      created-at: stacks-block-height,
+      is-verified: false
+    })
+    (ok true)))
+
+;; Update user profile
+(define-public (update-profile (username (string-ascii 50)) (bio (string-ascii 300)))
+  (let ((profile (unwrap! (map-get? user-profiles tx-sender) ERR-USER-NOT-FOUND)))
+    (asserts! (> (len username) u0) ERR-INVALID-PARAMETERS)
+    (map-set user-profiles tx-sender (merge profile {
+      username: username,
+      bio: bio
+    }))
+    (ok true)))
+
+;; Rate a user after quest completion
+(define-public (rate-user (ratee principal) (quest-id uint) (rating uint) (comment (string-ascii 200)))
+  (let (
+    (quest (unwrap! (map-get? quests quest-id) ERR-QUEST-NOT-FOUND))
+    (profile (unwrap! (map-get? user-profiles ratee) ERR-USER-NOT-FOUND))
+  )
+    (asserts! (is-eq (get status quest) "completed") ERR-QUEST-NOT-ACTIVE)
+    (asserts! (and (>= rating u1) (<= rating u5)) ERR-INVALID-RATING)
+    (asserts! (or (is-eq tx-sender (get creator quest)) 
+                  (is-eq tx-sender (unwrap! (get assignee quest) ERR-NOT-AUTHORIZED))) ERR-NOT-AUTHORIZED)
+    (asserts! (is-none (map-get? user-ratings {rater: tx-sender, ratee: ratee, quest-id: quest-id})) ERR-ALREADY-RATED)
+    
+    (map-set user-ratings {rater: tx-sender, ratee: ratee, quest-id: quest-id} {
+      rating: rating,
+      comment: comment,
+      created-at: stacks-block-height
+    })
+    
+    ;; Update user's average rating
+    (let (
+      (current-rating (get rating profile))
+      (rating-count (get rating-count profile))
+      (new-count (+ rating-count u1))
+      (new-rating (/ (+ (* current-rating rating-count) rating) new-count))
+    )
+      (map-set user-profiles ratee (merge profile {
+        rating: new-rating,
+        rating-count: new-count
+      }))
+    )
+    
+    (ok true)))
